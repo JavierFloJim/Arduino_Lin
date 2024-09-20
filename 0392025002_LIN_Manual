@@ -6,13 +6,11 @@
  * Author: Leobardo Lopez LOL4TL
  */
 
-#include <Adafruit_RGBLCDShield.h>
-#include <Adafruit_MCP23017.h>
+#include <LiquidCrystal.h>
 #include "Arduino.h"
 #include "lin.h"
 #include <Wire.h>
 
-Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
 #define WHITE 0x7
 
 //Definitions for LIN Transceiver pins
