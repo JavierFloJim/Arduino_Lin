@@ -1,0 +1,219 @@
+/*PDE-L LIN 
+ * Bosch PN 0 392 025 002
+ * Customer Ford
+ * EID 0145Y000LX V1.1
+ * LIN Manual Control w/Buttons
+ * Author: Leobardo Lopez LOL4TL
+ */
+
+
+#include <LiquidCrystal.h>
+#include "Arduino.h"
+#include "lin.h"
+#include "SPI.h"
+#include "SoftwareSerial.h"
+
+// LIN serial Interface
+//#define LIN Serial1
+#define PUMP_ID 0X28
+
+//Definición de los pines para el LCD
+LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
+
+int lcd_key     = 0;
+int adc_key_in  = 0;
+
+#define btnRIGHT  0
+#define btnUP     1
+#define btnDOWN   2
+#define btnLEFT   3
+#define btnSELECT 4
+#define btnNONE   5
+
+int read_LCD_buttons() {
+  adc_key_in = analogRead(0);
+  if (adc_key_in > 1000) return btnNONE;
+  if (adc_key_in < 50)   return btnRIGHT;
+  if (adc_key_in < 250)  return btnUP;
+  if (adc_key_in < 450)  return btnDOWN;
+  if (adc_key_in < 600)  return btnLEFT;
+  if (adc_key_in < 920)  return btnSELECT;
+}
+
+
+int serSpeed = 19200;  // speed LIN
+int breakDuration = 13; // number of bits break signal
+
+byte addIDParity(byte id);
+
+int txPin1 = 19;        // TX Pin LIN serial
+int rxPin1 = 18;        // RX Pin LIN serial
+int linCSPin = 2;       // CS Pin
+
+SoftwareSerial linSerial1(rxPin1, txPin1); // RX, TX
+
+// Global Variables
+
+byte CMD_TGT_RPM_PUMP_MECPA = 0;
+byte LinMessage[9] = {0};
+byte LinMessageA[200] = {0};
+boolean linSerial1On = 0;
+
+//LIN Bus Protocol Version
+//uint8_t LIN_BUS_PROTOCOL_VERSION = 2;
+
+//Crear una instancia para el bus LIN
+//Lin LIN_BUS;
+
+//ID y longitud del frame de comando de velocidad de la bomba
+//uint8_t COMMAND_MECPA_LIN_ID  = 0x14;
+//uint8_t COMMAND_MECPA_LIN_LENGTH = 2;
+
+//Comando de velocidad de la bomba
+//uint8_t CMD_TGT_RPM_PUMP_MECPA =  0x00;
+//uint8_t CMD_Mode_PUMP_Rq_MECPA_CMD_Reset_Rq_MECPA = 0x00;
+
+//Frame de comando de velocidad de la bomba
+//uint8_t COMMAND_MECPA_LIN [] = { CMD_TGT_RPM_PUMP_MECPA, CMD_Mode_PUMP_Rq_MECPA_CMD_Reset_Rq_MECPA };
+
+void setup() {
+  // Configuración del LCD
+  lcd.begin(16, 2);
+  lcd.print("Ford LIN Manual");
+  lcd.setCursor(0, 1);
+  lcd.print("Speed Value:");
+  lcd.setCursor(13, 1);
+  lcd.print("0   ");
+
+  // Indicador LED para mostrar que el programa está corriendo
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH);
+
+/*
+  // Configuración de los pines del transceptor LIN
+  pinMode(LIN_TRX_CS_PIN, OUTPUT);
+  digitalWrite(LIN_TRX_CS_PIN, HIGH);
+  pinMode(LIN_TRX_FAULT_PIN, OUTPUT);
+  digitalWrite(LIN_TRX_FAULT_PIN, HIGH);    
+
+  // Configuración de la tasa de baudios para el bus LIN
+  LIN_BUS.begin(14170);
+*/
+  pinMode(linCSPin, OUTPUT);               // CS Signal LIN Tranceiver
+  digitalWrite(linCSPin, HIGH);
+
+  linSerial1.begin(serSpeed);
+  linSerial1On = 1;
+
+  // Inicializar comunicación serial con el Arduino Uno
+  Serial2.begin(9600);
+}
+
+void loop() {
+  lcd.setCursor(13, 1);
+  
+ lcd_key = read_LCD_buttons();
+    if (lcd_key==(btnUP)) {
+      CMD_TGT_RPM_PUMP_MECPA++;   
+      if (CMD_TGT_RPM_PUMP_MECPA > 0xFF) {
+        CMD_TGT_RPM_PUMP_MECPA = 0x00;
+        lcd.print("0  ");
+      }
+    }
+   else if (lcd_key==(btnDOWN)) {
+      CMD_TGT_RPM_PUMP_MECPA--; 
+      if (CMD_TGT_RPM_PUMP_MECPA < 0x00) {
+        CMD_TGT_RPM_PUMP_MECPA = 0xFF;
+        lcd.print("255");
+      }
+    }
+  
+
+  // Mostrar el valor actual de la velocidad
+  lcd.print(CMD_TGT_RPM_PUMP_MECPA, DEC);
+
+  // Enviar el comando LIN con la nueva velocidad
+  //COMMAND_MECPA_LIN[0] = CMD_TGT_RPM_PUMP_MECPA;
+  sendPumpSpeed(CMD_TGT_RPM_PUMP_MECPA);
+
+  // Enviar la retroalimentación al Arduino Uno por el puerto Serial2
+  Serial2.print("Velocidad: ");
+  Serial2.println(CMD_TGT_RPM_PUMP_MECPA, DEC);
+
+  if(readPumpResponse()){
+    Serial3.print("Velocidad ajustada a: ");
+    Serial3.println(CMD_TGT_RPM_PUMP_MECPA);
+    }
+    else{
+      Serial3.print("Error en la comunicacion ");
+      }
+
+  delay(100);
+}
+
+//Funcion para enviar comando LIN
+void sendPumpSpeed(byte CMD_TGT_RPM_PUMP_MECPA){
+  byte checksum = 0;
+  byte frame[8] = {CMD_TGT_RPM_PUMP_MECPA, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00,0x00
+    };
+
+//byte de sincronizacion
+  linSerial1.write(0x55);
+
+//Enviar ID de bomba con paridad
+  linSerial1.write(addIDParity(PUMP_ID));
+
+//Enviar datos
+  for(byte i = 0; i < 8; i++){
+    linSerial1.write(frame[i]);
+    checksum += frame[i]; //sumar bytes para el checksum
+    }
+
+  //enviar checksum
+  checksum= ~checksum;
+
+  //Invertir bits para obtener checksum
+  linSerial1.write(checksum);
+  
+  }
+
+//Funcion para leer respuesta de la bomba
+
+boolean readPumpResponse(){
+  byte response[8];
+  byte index = 0;
+  byte checksum = 0;
+
+  //espera a recibir datos desde LIN bus
+  while (linSerial1.available() > 0){
+    response[index] = linSerial1.read();
+    index++;
+    if (index > 7){
+      break;
+      }
+    }
+
+    //verificar longitud de la respuesta
+    if (index < 8){
+      return false;
+      }
+    //calcular y verificar checksum de la respuesta
+    for(byte i = 0; i < 7; i++){
+      checksum += response[i];
+      }
+      checksum =~checksum;
+
+      //verificar checksum correcto
+      if(checksum == response[7]){
+        return true;
+        }
+
+       return false;
+}
+       //funcion para agregar paridad al identificador LIN
+       byte addIDParity(byte id){
+        byte p0 = bitRead(id,0) ^ bitRead(id,1) ^ bitRead(id,2) ^ bitRead(id,4);
+        byte p1 = ~(bitRead(id,1) ^ bitRead(id,3) ^ bitRead(id,4) ^ bitRead(id,5));
+        return id | (p0<<6) | (p1<<7);
+        }
